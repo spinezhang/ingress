@@ -22,11 +22,16 @@ import (
 	"strconv"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"strings"
+	"os"
+	"text/template"
+	"io"
 )
 
 const (
 	resyncPeriod  = 20 * time.Second
 	reloadCmd = "/haproxy_reload"
+	configFile = "/etc/haproxy/haproxy.cfg"
+	templateFile = "/haproxy.tmpl"
 )
 
 var (
@@ -60,20 +65,32 @@ type haproxyController struct {
 	defaultHttpService string
 	httpPort			int
 	lbDefAlgorithm		string
+	sslCert        		string
+	startSyslog			bool
 
 	httpSvc 			[]haService
-	httpsTermSvc 		[]haService
+	httpsSvc 			[]haService
 	tcpSvc 				[]haService
 }
 
-func newHaproxyController(kubeClient kubernetes.Interface, namespace string, httpPort int, defaultHttpSvc string,
-		lbDefAlgorithm string, tcpSvcs map[string]int) *haproxyController {
+type haproxyParams struct {
+	startSyslog    	bool
+	httpPort 		int
+	defaultHttpSvc 	string
+	lbDefAlgorithm 	string
+	tcpSvcs 		map[string]int
+	//sslCert        	string
+}
+
+func newHaproxyController(kubeClient kubernetes.Interface, namespace string, params *haproxyParams) *haproxyController {
 	lbc := haproxyController{
 		client: kubeClient,
-		tcpServices:     tcpSvcs,
-		defaultHttpService: defaultHttpSvc,
-		httpPort: httpPort,
-		lbDefAlgorithm: lbDefAlgorithm,
+		tcpServices:     params.tcpSvcs,
+		defaultHttpService: params.defaultHttpSvc,
+		httpPort: params.httpPort,
+		lbDefAlgorithm: params.lbDefAlgorithm,
+		//sslCert: params.sslCert,
+		startSyslog: params.startSyslog,
 		syncRateLimiter: flowcontrol.NewTokenBucketRateLimiter(0.1, 1),
 	}
 
@@ -191,7 +208,7 @@ func (lbc *haproxyController) syncIngress(key interface{}) error {
 		return fmt.Errorf("waiting for stores to sync")
 	}
 
-	httpSvc, httpsTermSvc, tcpSvc := lbc.getServices()
+	httpSvc, httpsSvc, tcpSvc := lbc.getServices()
 
 	isChanged := false
 	if !reflect.DeepEqual(httpSvc, lbc.httpSvc) {
@@ -199,9 +216,9 @@ func (lbc *haproxyController) syncIngress(key interface{}) error {
 		lbc.httpSvc = httpSvc
 		isChanged = true
 	}
-	if !reflect.DeepEqual(httpsTermSvc, lbc.httpsTermSvc) {
-		glog.Info("HttpsTerm services is changed:",httpsTermSvc)
-		lbc.httpsTermSvc = httpsTermSvc
+	if !reflect.DeepEqual(httpsSvc, lbc.httpsSvc) {
+		glog.Info("Https services is changed:",httpsSvc)
+		lbc.httpsSvc = httpsSvc
 		isChanged = true
 	}
 	if !reflect.DeepEqual(tcpSvc, lbc.tcpSvc) {
@@ -211,7 +228,7 @@ func (lbc *haproxyController) syncIngress(key interface{}) error {
 	}
 
 	if isChanged {
-		lbc.writeConfig(httpSvc, httpsTermSvc, tcpSvc)
+		lbc.writeConfig(httpSvc, httpsSvc, tcpSvc)
 		lbc.reload()
 	}
 
@@ -219,6 +236,7 @@ func (lbc *haproxyController) syncIngress(key interface{}) error {
 }
 
 func (lbc *haproxyController) reload() error {
+	glog.Info("Reload haproxy...")
 	output, err := exec.Command("sh", "-c", reloadCmd).CombinedOutput()
 	msg := fmt.Sprintf("%v -- %v", reloadCmd, string(output))
 	if err != nil {
@@ -262,7 +280,7 @@ func (lbc *haproxyController) getEndpoints(s *api_v1.Service, servicePort *api_v
 	return
 }
 
-func (lbc *haproxyController) getServices() (httpSvc []haService, httpsTermSvc []haService, tcpSvc []haService) {
+func (lbc *haproxyController) getServices() (httpSvc []haService, httpsSvc []haService, tcpSvc []haService) {
 	services := []*api_v1.Service{}
 	defaultService := lbc.getKubeService(lbc.defaultHttpService)
 	if defaultSvc != nil {
@@ -319,11 +337,11 @@ func (lbc *haproxyController) getServices() (httpSvc []haService, httpsTermSvc [
 			}
 
 			// By default sslTerm is disabled
-			newSvc.SslTerm = false
-			if val, ok := serviceAnnotations(s.ObjectMeta.Annotations).getSslTerm(); ok {
+			newSvc.SslByPass = false
+			if val, ok := serviceAnnotations(s.ObjectMeta.Annotations).getSslByPass(); ok {
 				b, err := strconv.ParseBool(val)
-				if err == nil {
-					newSvc.SslTerm = b
+				if err == nil && b && servicePort.Name == "https" {
+					newSvc.SslByPass = true
 				}
 			}
 
@@ -343,8 +361,8 @@ func (lbc *haproxyController) getServices() (httpSvc []haService, httpsTermSvc [
 				}
 
 				newSvc.FrontendPort = lbc.httpPort
-				if newSvc.SslTerm == true {
-					httpsTermSvc = append(httpsTermSvc, newSvc)
+				if newSvc.SslByPass == true {
+					httpsSvc = append(httpsSvc, newSvc)
 				} else {
 					httpSvc = append(httpSvc, newSvc)
 				}
@@ -359,7 +377,7 @@ func (lbc *haproxyController) getServices() (httpSvc []haService, httpsTermSvc [
 	}
 
 	sort.Sort(serviceByName(httpSvc))
-	sort.Sort(serviceByName(httpsTermSvc))
+	sort.Sort(serviceByName(httpsSvc))
 	sort.Sort(serviceByName(tcpSvc))
 
 	return
@@ -499,9 +517,73 @@ func (lbc *haproxyController) getTcpServices(services []*api_v1.Service) []*api_
 	return newServices
 }
 
-func (lbc *haproxyController) writeConfig(httpSvc []haService, httpsTermSvc []haService, tcpSvc []haService) {
+func (lbc *haproxyController) writeConfig(httpSvc []haService, httpsSvc []haService, tcpSvc []haService) {
+	services := map[string][]haService {
+		"http":  httpSvc,
+		"https": httpsSvc,
+		"tcp":   tcpSvc,
+	}
 
+	var w io.Writer
+	w, err := os.Create(configFile)
+	if err != nil {
+		return
+	}
+	var t *template.Template
+	t, err = template.ParseFiles(templateFile)
+	if err != nil {
+		return
+	}
+
+	conf := make(map[string]interface{})
+	conf["startSyslog"] = strconv.FormatBool(lbc.startSyslog)
+	conf["services"] = services
+	if len(httpsSvc) > 0 {
+		conf["httpsByPass"] = strconv.FormatBool(true)
+	} else {
+		conf["httpsByPass"] = strconv.FormatBool(false)
+	}
+
+	//var sslConfig string
+	//if lbc.sslCert != "" {
+	//	sslConfig = "crt " + lbc.sslCert
+	//}
+	//conf["sslCert"] = sslConfig
+
+	// default load balancer algorithm is roundrobin
+	conf["defLbAlgorithm"] = lbDefAlgorithm
+	if lbc.lbDefAlgorithm != "" {
+		conf["defLbAlgorithm"] = lbc.lbDefAlgorithm
+	}
+
+	defaultHttpName := lbc.defaultHttpService
+	array := strings.Split(lbc.defaultHttpService, "/")
+	if len(array) == 2 {
+		defaultHttpName = array[1]
+	}
+	conf["defaultHttpService"] = defaultHttpName
+
+	for _,svc := range httpsSvc {
+		httpsName := svc.Name
+		tempArray := strings.Split(svc.Name, ":")
+		if len(tempArray) == 2 {
+			httpsName = tempArray[0]
+		}
+		if httpsName == defaultHttpName {
+			conf["defaultHttps"] = svc.Name
+			glog.Infof("defaultHttps:",svc.Name)
+			break
+		}
+	}
+
+
+	if err = t.Execute(w, conf); err != nil {
+		glog.Errorf("Error write haproxy config file:",err)
+	} else {
+		glog.Info("Success write haproxy config file")
+	}
 }
+
 // encapsulates all the hacky convenience type name modifications for lb rules.
 // - :80 services don't need a :80 postfix
 // - default ns should be accessible without /ns/name (when we have /ns support)

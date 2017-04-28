@@ -1,20 +1,18 @@
 # This file uses golang text templates (http://golang.org/pkg/text/template/) to
 # dynamically configure the haproxy loadbalancer.
+
+{{ $defaultHttpsSvc := .defaultHttps }}
+
 global
     daemon
     stats socket /tmp/haproxy
-    server-state-file global       
+    server-state-file global
     server-state-base /var/state/haproxy/
 
 {{ if eq .startSyslog "true" }}
     # log using a syslog socket
     log /var/run/haproxy.log.socket local0 info
     log /var/run/haproxy.log.socket local0 notice
-{{ end }}
-
-{{ if ne .sslCert "" }}
-    ssl-default-bind-ciphers ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-AES256-GCM-SHA384:DHE-RSA-AES128-GCM-SHA256:DHE-DSS-AES128-GCM-SHA256:kEDH+AESGCM:ECDHE-RSA-AES128-SHA256:ECDHE-ECDSA-AES128-SHA256:ECDHE-RSA-AES128-SHA:ECDHE-ECDSA-AES128-SHA:ECDHE-RSA-AES256-SHA384:ECDHE-ECDSA-AES256-SHA384:ECDHE-RSA-AES256-SHA:ECDHE-ECDSA-AES256-SHA:DHE-RSA-AES128-SHA256:DHE-RSA-AES128-SHA:DHE-DSS-AES128-SHA256:DHE-RSA-AES256-SHA256:DHE-DSS-AES256-SHA:DHE-RSA-AES256-SHA:!aNULL:!eNULL:!EXPORT:!DES:!RC4:!3DES:!MD5:!PSK
-    ssl-default-bind-options no-tls-tickets
 {{ end }}
 
 defaults
@@ -81,15 +79,12 @@ listen stats
     stats realm Haproxy\ Statistics
     stats uri /
 
-{{ if ne .sslCert "" }}
+{{ if eq .httpsByPass "true" }}
 frontend httpsfrontend
-    mode http
-    bind :443 ssl {{ .sslCert }} no-sslv3
+    mode tcp
+    bind *:443
 
-    # HSTS (15768000 seconds = 6 months)
-    rspadd  Strict-Transport-Security:\ max-age=15768000
-
-{{range $i, $svc := .services.httpsTerm}}
+{{range $i, $svc := .services.https}}
     {{ if $svc.AclMatch }} acl url_acl_{{$svc.Name}} path_beg {{$svc.AclMatch}}
     {{else}} acl url_acl_{{$svc.Name}} path_beg /{{$svc.Name}}
     {{ end }}
@@ -97,7 +92,12 @@ frontend httpsfrontend
     {{ if $svc.Host }}acl host_acl_{{$svc.Name}} hdr(host) {{$svc.Host}}
     use_backend {{$svc.Name}} if url_acl_{{$svc.Name}} or host_acl_{{$svc.Name}}
     {{ else }}use_backend {{$svc.Name}} if url_acl_{{$svc.Name}}
-{{ end }}
+    {{ end }}
+
+{{ if ne $defaultHttpsSvc "" }}
+    default_backend {{ $defaultHttpsSvc }}
+{{end}}
+
 {{end}}
 {{end}}
 
@@ -120,9 +120,8 @@ frontend httpfrontend
 {{ end }}
 {{end}}
 
-{{ if ne .rootHttpService "" }}
-    acl url_acl_root_http path_beg /
-    use_backend {{.rootHttpService}} if url_acl_root_http
+{{ if ne .defaultHttpService "" }}
+    default_backend {{.defaultHttpService}}
 {{end}}
 
 {{range $i, $svc := .services.http}}
@@ -161,10 +160,10 @@ backend {{$svc.Name}}
 {{end}}
 {{end}}
 
-{{range $i, $svc := .services.httpsTerm}}
+{{range $i, $svc := .services.https}}
 {{ $svcName := $svc.Name }}
 backend {{$svc.Name}}
-    option  httplog
+    mode tcp
     errorfile 400 /etc/haproxy/errors/400.http
     errorfile 403 /etc/haproxy/errors/403.http
     errorfile 408 /etc/haproxy/errors/408.http

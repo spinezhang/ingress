@@ -10,8 +10,6 @@ import (
 	"time"
 	"k8s.io/client-go/pkg/api"
 	"strconv"
-	//"k8s.io/kubernetes/pkg/client/unversioned"
-	//kubectl_util "k8s.io/kubernetes/pkg/kubectl/cmd/util"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
@@ -65,9 +63,9 @@ var (
 	startSyslog = flags.Bool("syslog", false, `if set, it will start a syslog server
                 that will forward haproxy logs to stdout.`)
 
-	sslCert   = flags.String("ssl-cert", "", `if set, it will load the certificate.`)
-	sslCaCert = flags.String("ssl-ca-cert", "", `if set, it will load the certificate from which
-		to load CA certificates used to verify client's certificate.`)
+	//sslCert   = flags.String("ssl-cert", "", `if set, it will load the certificate.`)
+	//sslCertKey = flags.String("ssl-cert-key", "", `if set, it will load the certificate from which
+	//	to load CA certificates used to verify client's certificate.`)
 
 	errorPage = flags.String("error-page", "", `if set, it will try to load the content
                 as a web page and use the content as error page. Is required that the URL returns
@@ -120,7 +118,19 @@ func main() {
 	if err != nil {
 		glog.Fatalf("Failed to create kubernetes client: %v", err)
 	}
-	lbc := newHaproxyController(kubeClient, api.NamespaceAll, *defaultHttpPort, *defaultSvc, *lbDefAlgorithm, tcpSvcs)
+	//sslCertFile := *sslCert
+	//if *sslCertKey != "" {
+	//	sslCertFile = mergeSslCert(*sslCert, *sslCertKey)
+	//}
+	params := haproxyParams {
+		startSyslog: *startSyslog,
+		httpPort: *defaultHttpPort,
+		defaultHttpSvc: *defaultSvc,
+		lbDefAlgorithm: *lbDefAlgorithm,
+		tcpSvcs: tcpSvcs,
+		//sslCert: sslCertFile,
+	}
+	lbc := newHaproxyController(kubeClient, api.NamespaceAll, &params)
 
 	lbc.Run()
 	glog.Infof("Running...")
@@ -175,4 +185,3 @@ func parseTCPServices(tcpServices string) map[string]int {
 
 	return tcpSvcs
 }
-

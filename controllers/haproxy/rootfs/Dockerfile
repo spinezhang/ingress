@@ -12,20 +12,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-FROM registry.cn-hangzhou.aliyuncs.com/dhms/haproxy:1.7-alpine
+FROM registry.cn-hangzhou.aliyuncs.com/dhms/haproxy:1.7
 
 RUN mkdir -p /etc/haproxy/errors /var/state/haproxy
 COPY errors /etc/haproxy/errors
+COPY dumb-init /dumb-init
+RUN chmod +x /dumb-init
 COPY haproxy.cfg /etc/haproxy/haproxy.cfg
 COPY haproxy-ingress-controller /haproxy-ingress-controller
 RUN chmod +x /haproxy-ingress-controller
 COPY haproxy.tmpl haproxy.tmpl
-COPY nginx.tmpl nginx.tmpl
 COPY haproxy_reload /haproxy_reload
 RUN chmod +x /haproxy_reload
 
-ENTRYPOINT ["/haproxy-ingress-controller"]
+ENTRYPOINT ["/dumb-init", "/haproxy-ingress-controller"]
 
 RUN touch /var/run/haproxy.pid
-#RUN apk add --no-cache bash
-#RUN apk --no-cache add socat
