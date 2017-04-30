@@ -3,9 +3,8 @@ package main
 const (
 	lbAlgorithmKey           = "serviceloadbalancer/lb.algorithm"
 	lbHostKey                = "serviceloadbalancer/lb.host"
-	//lbSslTerm                = "serviceloadbalancer/lb.sslTerm"
-	lbSslByPass                = "serviceloadbalancer/lb.sslByPass"
-	lbAclMatch               = "serviceloadbalancer/lb.aclMatch"
+	//lbSslByPass                = "serviceloadbalancer/lb.sslByPass"
+	//lbAclMatch               = "serviceloadbalancer/lb.aclMatch"
 	lbCookieStickySessionKey = "serviceloadbalancer/lb.cookie-sticky-session"
 )
 
@@ -25,12 +24,10 @@ type haService struct {
 	// host header inside the http request. It only applies to http traffic.
 	Host string
 
-	// if true, terminate ssl using the loadbalancers certificates.
-	//SslTerm bool
-	SslByPass bool
+	//SslByPass bool
 
 	// if set use this to match the path rule
-	AclMatch string
+	Path string
 
 	// Algorithm
 	Algorithm string
@@ -73,10 +70,10 @@ func (s serviceAnnotations) getAlgorithm() (string, bool) {
 	return val, ok
 }
 
-func (s serviceAnnotations) getHost() (string, bool) {
-	val, ok := s[lbHostKey]
-	return val, ok
-}
+//func (s serviceAnnotations) getHost() (string, bool) {
+//	val, ok := s[lbHostKey]
+//	return val, ok
+//}
 
 func (s serviceAnnotations) getCookieStickySession() (string, bool) {
 	val, ok := s[lbCookieStickySessionKey]
@@ -88,13 +85,13 @@ func (s serviceAnnotations) getCookieStickySession() (string, bool) {
 //	return val, ok
 //}
 
-func (s serviceAnnotations) getSslByPass() (string, bool) {
-	val, ok := s[lbSslByPass]
-	return val, ok
-}
+//func (s serviceAnnotations) getSslByPass() (string, bool) {
+//	val, ok := s[lbSslByPass]
+//	return val, ok
+//}
 
-func (s serviceAnnotations) getAclMatch() (string, bool) {
-	val, ok := s[lbAclMatch]
-	return val, ok
-}
+//func (s serviceAnnotations) getAclMatch() (string, bool) {
+//	val, ok := s[lbAclMatch]
+//	return val, ok
+//}
 

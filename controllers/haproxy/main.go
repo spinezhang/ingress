@@ -57,8 +57,8 @@ var (
                 serviceName:servicePort pairings. This assumes you've opened up the right
                 hostPorts for each service that serves ingress traffic.`)
 
-	statsPort = flags.Int("stats-port", 1936, `Port for loadbalancer stats,
-                Used in the loadbalancer liveness probe.`)
+	//statsPort = flags.Int("stats-port", 1936, `Port for loadbalancer stats,
+     //           Used in the loadbalancer liveness probe.`)
 
 	startSyslog = flags.Bool("syslog", false, `if set, it will start a syslog server
                 that will forward haproxy logs to stdout.`)
@@ -77,10 +77,8 @@ var (
 	lbDefAlgorithm = flags.String("balance-algorithm", "roundrobin", `if set, it allows a custom
                 default balance algorithm.`)
 
-	defaultSvc = flags.String("default-backend-service", "", `if set, use this service for / path.`)
-
-	defaultHttpPort = flags.Int("http-port", 80,
-		`default Http port.`)
+	//defaultSvc = flags.String("default-backend-service", "", `if set, use this service for / path.`)
+	defaultHttpPort = flags.Int("http-port", 80, `default Http port.`)
 )
 
 func main() {
@@ -104,8 +102,7 @@ func main() {
 		glog.Infof("No tcp/https services specified")
 	}
 
-	glog.Infof("default backend service:",*defaultSvc)
-
+	//glog.Infof("default backend service:",*defaultSvc)
 	if *startSyslog {
 		//cfg.startSyslog = true
 		_, err := newSyslogServer("/var/run/haproxy.log.socket")
@@ -125,7 +122,7 @@ func main() {
 	params := haproxyParams {
 		startSyslog: *startSyslog,
 		httpPort: *defaultHttpPort,
-		defaultHttpSvc: *defaultSvc,
+		//defaultHttpSvc: *defaultSvc,
 		lbDefAlgorithm: *lbDefAlgorithm,
 		tcpSvcs: tcpSvcs,
 		//sslCert: sslCertFile,

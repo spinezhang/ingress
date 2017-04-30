@@ -56,30 +56,12 @@ func newStaticPageHandler(page string, defaultPage string, returnCode int) *stat
 // registerHandlers  services liveness probes.
 func registerHandlers(port int, s *staticPageHandler) {
 	http.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
-		// Delegate a check to the haproxy stats service.
-		response, err := http.Get(fmt.Sprintf("http://localhost:%v", *statsPort))
-		if err != nil {
-			glog.Infof("Error %v", err)
-			w.WriteHeader(http.StatusInternalServerError)
-		} else {
-			defer response.Body.Close()
-			if response.StatusCode != http.StatusOK {
-				contents, err := ioutil.ReadAll(response.Body)
-				if err != nil {
-					glog.Infof("Error reading resonse on receiving status %v: %v",
-						response.StatusCode, err)
-				}
-				glog.Infof("%v\n", string(contents))
-				w.WriteHeader(response.StatusCode)
-			} else {
-				w.WriteHeader(200)
-				w.Write([]byte("ok"))
-			}
-		}
+		w.WriteHeader(200)
+		w.Write([]byte("ok"))
 	})
 
 	// handler for not matched traffic
-	http.HandleFunc("/", s.Getfunc)
+	//http.HandleFunc("/", s.Getfunc)
 
 	glog.Fatal(http.ListenAndServe(fmt.Sprintf(":%v", port), nil))
 }

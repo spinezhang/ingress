@@ -8,7 +8,6 @@ global
     stats socket /tmp/haproxy
     server-state-file global
     server-state-base /var/state/haproxy/
-
 {{ if eq .startSyslog "true" }}
     # log using a syslog socket
     log /var/run/haproxy.log.socket local0 info
@@ -17,12 +16,11 @@ global
 
 defaults
     log global
-   
     load-server-state-from-file global
     
     # Enable session redistribution in case of connection failure.
     option redispatch
-    
+
     # Disable logging of null connections (haproxy connections like checks). 
     # This avoids excessive logs from haproxy internals.
     option dontlognull
@@ -32,8 +30,7 @@ defaults
 
     # Enable insertion of the X-Forwarded-For header to requests sent to 
     # servers and keep client IP address.
-    option forwardfor
-    
+
     # Enable HTTP keep-alive from client to server.
     option http-keep-alive
 
@@ -83,25 +80,25 @@ listen stats
 frontend httpsfrontend
     mode tcp
     bind *:443
+    option forwardfor
 
 {{range $i, $svc := .services.https}}
-    {{ if $svc.AclMatch }} acl url_acl_{{$svc.Name}} path_beg {{$svc.AclMatch}}
+    {{ if $svc.Path }} acl url_acl_{{$svc.Name}} path_beg {{$svc.Path}}
     {{else}} acl url_acl_{{$svc.Name}} path_beg /{{$svc.Name}}
     {{ end }}
-    
-    {{ if $svc.Host }}acl host_acl_{{$svc.Name}} hdr(host) {{$svc.Host}}
-    use_backend {{$svc.Name}} if url_acl_{{$svc.Name}} or host_acl_{{$svc.Name}}
-    {{ else }}use_backend {{$svc.Name}} if url_acl_{{$svc.Name}}
+    use_backend {{$svc.Name}} if url_acl_{{$svc.Name}}
+    {{ if $svc.Host }}acl host_acl_{{$svc.Name}} hdr(host) -i {{$svc.Host}}
+    use_backend {{$svc.Name}} if host_acl_{{$svc.Name}}
     {{ end }}
-
+{{end}}
 {{ if ne $defaultHttpsSvc "" }}
+    acl url_acl_http_root path_beg /
     default_backend {{ $defaultHttpsSvc }}
 {{end}}
-
-{{end}}
 {{end}}
 
 
+{{ if ne .defaultHttpService "" }}
 frontend httpfrontend
     # Frontend bound on all network interfaces on port 80
     bind *:80
@@ -113,15 +110,17 @@ frontend httpfrontend
     # condition to determine the backend to be used
     # the style of if/else blocks is meant to preserves the format of the output config file
 {{range $i, $svc := .services.http}}
-    acl url_acl_{{$svc.Name}} path_beg /{{$svc.Name}}
-    {{ if $svc.Host }}acl host_acl_{{$svc.Name}} hdr(host) {{$svc.Host}}
-    use_backend {{$svc.Name}} if url_acl_{{$svc.Name}} or host_acl_{{$svc.Name}}
-    {{ else }}use_backend {{$svc.Name}} if url_acl_{{$svc.Name}}
-{{ end }}
+    {{ if $svc.Path }} acl url_acl_{{$svc.Name}} path_beg {{$svc.Path}}
+    {{else}} acl url_acl_{{$svc.Name}} path_beg /{{$svc.Name}}
+    {{ end }}
+    use_backend {{$svc.Name}} if url_acl_{{$svc.Name}}
+    {{ if $svc.Host }}acl host_acl_{{$svc.Name}} hdr(host) -i {{$svc.Host}}
+    use_backend {{$svc.Name}} if host_acl_{{$svc.Name}}
+    {{ end }}
 {{end}}
-
 {{ if ne .defaultHttpService "" }}
     default_backend {{.defaultHttpService}}
+{{end}}
 {{end}}
 
 {{range $i, $svc := .services.http}}
@@ -138,7 +137,7 @@ backend {{$svc.Name}}
 
     balance {{$svc.Algorithm}}
     # TODO: Make the path used to access a service customizable.
-    reqrep ^([^\ :]*)\ /{{$svc.Name}}[/]?(.*) \1\ /\2
+#    reqrep ^([^\ :]*)\ /{{$svc.Name}}[/]?(.*) \1\ /\2
 {{if and $svc.SessionAffinity (not $svc.CookieStickySession)}}
     # create a stickiness table using client IP address as key
     # http://cbonte.github.io/haproxy-dconv/configuration-1.5.html#stick-table
@@ -174,10 +173,10 @@ backend {{$svc.Name}}
 
     balance {{$svc.Algorithm}}
 
-    {{if ( not $svc.AclMatch )}}
+#    {{if ( not $svc.Path )}}
     #Rewrite the request back to root from the url that is used for the frontend.
-    reqrep ^([^\ :]*)\ /{{$svc.Name}}[/]?(.*) \1\ /\2
-    {{end}}
+#    reqrep ^([^\ :]*)\ /{{$svc.Name}}[/]?(.*) \1\ /\2
+#    {{end}}
 
 {{if and $svc.SessionAffinity (not $svc.CookieStickySession)}}
     # create a stickiness table using client IP address as key
