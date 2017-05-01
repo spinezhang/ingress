@@ -24,6 +24,7 @@ import (
 	"os"
 	"text/template"
 	"io"
+	hash "github.com/mitchellh/hashstructure"
 )
 
 const (
@@ -48,10 +49,14 @@ type haproxyController struct {
 	nodeController     	cache.Controller
 	svcController      	cache.Controller
 	endpController      cache.Controller
+	secretController 	cache.Controller
 	ingLister  			store.IngressLister
 	svcLister  			store.ServiceLister
 	nodeLister 			store.NodeLister
 	endpLister 			store.EndpointLister
+	secretLister 		store.SecretLister
+	sslCertTracker 		*sslCertTracker
+	secretTracker 		*secretTracker
 
 	syncRateLimiter flowcontrol.RateLimiter
 
@@ -67,8 +72,11 @@ type haproxyController struct {
 	startSyslog			bool
 
 	httpSvc 			[]haService
-	httpsSvc 			[]haService
 	tcpSvc 				[]haService
+
+	rootCertHash		uint64
+	haveHttps			bool
+	pendingSsl			bool
 }
 
 type haproxyParams struct {
@@ -82,12 +90,16 @@ type haproxyParams struct {
 func newHaproxyController(kubeClient kubernetes.Interface, namespace string, params *haproxyParams) *haproxyController {
 	lbc := haproxyController{
 		client: kubeClient,
-		tcpServices:     params.tcpSvcs,
-		//defaultHttpService: params.defaultHttpSvc,
+		tcpServices: params.tcpSvcs,
 		httpPort: params.httpPort,
 		lbDefAlgorithm: params.lbDefAlgorithm,
 		startSyslog: params.startSyslog,
 		syncRateLimiter: flowcontrol.NewTokenBucketRateLimiter(0.1, 1),
+		sslCertTracker: newSSLCertTracker(),
+		secretTracker:  newSecretTracker(),
+		rootCertHash: uint64(0),
+		haveHttps: false,
+		pendingSsl: false,
 	}
 
 	lbc.syncQueue = task.NewTaskQueue(lbc.syncIngress)
@@ -102,6 +114,7 @@ func newHaproxyController(kubeClient kubernetes.Interface, namespace string, par
 			}
 			glog.Infof("Add notification received for Ingress %v/%v", addIng.Namespace, addIng.Name)
 			lbc.syncQueue.Enqueue(obj)
+			lbc.extractSecretNames(addIng)
 		},
 		DeleteFunc: func(obj interface{}) {
 			delIng := obj.(*extensions.Ingress)
@@ -121,9 +134,14 @@ func newHaproxyController(kubeClient kubernetes.Interface, namespace string, par
 			if !reflect.DeepEqual(old, cur) {
 				glog.Infof("Ingress %v changed, syncing", curIng.Name)
 				lbc.syncQueue.Enqueue(cur)
+				lbc.extractSecretNames(curIng)
 			}
 		},
 	}
+
+	lbc.secretLister.Store, lbc.secretController = cache.NewInformer(
+		cache.NewListWatchFromClient(kubeClient.Core().RESTClient(), "secrets", api_v1.NamespaceAll, fields.Everything()),
+		&api_v1.Secret{}, resyncPeriod, cache.ResourceEventHandlerFuncs{})
 
 	lbc.ingLister.Store, lbc.ingController = cache.NewInformer(
 		cache.NewListWatchFromClient(kubeClient.Extensions().RESTClient(), "ingresses", namespace, fields.Everything()),
@@ -175,10 +193,12 @@ func (lbc *haproxyController) Run() {
 	go lbc.reload()
 
 	go lbc.ingController.Run(wait.NeverStop)
+	go lbc.secretController.Run(wait.NeverStop)
 	go lbc.nodeController.Run(wait.NeverStop)
 	go lbc.svcController.Run(wait.NeverStop)
 	go lbc.endpController.Run(wait.NeverStop)
 
+	go wait.Forever(lbc.syncSecret, 10*time.Second)
 	go lbc.syncQueue.Run(10*time.Second, wait.NeverStop)
 }
 
@@ -187,7 +207,8 @@ func (lbc *haproxyController) Run() {
 func (lbc *haproxyController) storesSynced() bool {
 	return lbc.ingController.HasSynced() &&
 			lbc.svcController.HasSynced() &&
-			lbc.endpController.HasSynced()
+			lbc.endpController.HasSynced() &&
+			lbc.secretController.HasSynced()
 }
 
 // sync manages Ingress create/updates/deletes.
@@ -204,18 +225,13 @@ func (lbc *haproxyController) syncIngress(key interface{}) error {
 		return fmt.Errorf("waiting for stores to sync")
 	}
 
-	httpSvc, httpsSvc := lbc.getIngServices()
+	httpSvc := lbc.getIngServices()
 	tcpSvc := lbc.getTcpServices()
 
 	isChanged := false
 	if !reflect.DeepEqual(httpSvc, lbc.httpSvc) {
 		glog.Info("Http services is changed:",httpSvc)
 		lbc.httpSvc = httpSvc
-		isChanged = true
-	}
-	if !reflect.DeepEqual(httpsSvc, lbc.httpsSvc) {
-		glog.Info("Https services is changed:",httpsSvc)
-		lbc.httpsSvc = httpsSvc
 		isChanged = true
 	}
 	if !reflect.DeepEqual(tcpSvc, lbc.tcpSvc) {
@@ -225,7 +241,7 @@ func (lbc *haproxyController) syncIngress(key interface{}) error {
 	}
 
 	if isChanged {
-		lbc.writeConfig(httpSvc, httpsSvc, tcpSvc)
+		lbc.writeConfig(httpSvc, tcpSvc)
 		lbc.reload()
 	}
 
@@ -262,113 +278,7 @@ func (lbc *haproxyController) getEndpoints(s *api_v1.Service, servicePort int) (
 	return
 }
 
-//func (lbc *haproxyController) getServices() (httpSvc []haService, httpsSvc []haService, tcpSvc []haService) {
-//	services := []*api_v1.Service{}
-//	//defaultService := lbc.getKubeService(lbc.defaultHttpService)
-//	//if defaultSvc != nil {
-//	//	services = append(services,defaultService)
-//	//}
-//
-//	services = append(services, lbc.getIngServices(services)...)
-//	services = append(services, lbc.getTcpServices(services)...)
-//
-//	ep := []string{}
-//	for _, s := range services {
-//		if s.Spec.Type == api_v1.ServiceTypeLoadBalancer {
-//			glog.Infof("Ignoring service %v, it already has a loadbalancer", s.Name)
-//			continue
-//		}
-//		for _, servicePort := range s.Spec.Ports {
-//			// TODO: headless services?
-//			sName := s.Name
-//			if servicePort.Protocol == api_v1.ProtocolUDP {
-//				glog.Infof("Ignoring UDP port %v: %+v", sName, servicePort)
-//				continue
-//			}
-//
-//			ep = lbc.getEndpoints(s, &servicePort)
-//			if len(ep) == 0 {
-//				glog.Infof("No endpoints found for service %v, port %+v",sName, servicePort)
-//				continue
-//			}
-//			newSvc := haService{
-//				Name:        getServiceNameForLBRule(s, int(servicePort.Port)),
-//				Ep:          ep,
-//				BackendPort: getTargetPort(&servicePort),
-//			}
-//
-//			if val, ok := serviceAnnotations(s.ObjectMeta.Annotations).getHost(); ok {
-//				newSvc.Host = val
-//			}
-//
-//			if val, ok := serviceAnnotations(s.ObjectMeta.Annotations).getAlgorithm(); ok {
-//				for _, current := range supportedAlgorithms {
-//					if val == current {
-//						newSvc.Algorithm = val
-//						break
-//					}
-//				}
-//			} else {
-//				newSvc.Algorithm = lbc.lbDefAlgorithm
-//			}
-//
-//			// By default sticky session is disabled
-//			newSvc.SessionAffinity = false
-//			if s.Spec.SessionAffinity != "" {
-//				newSvc.SessionAffinity = true
-//			}
-//
-//			// By default sslTerm is disabled
-//			newSvc.SslByPass = false
-//			if val, ok := serviceAnnotations(s.ObjectMeta.Annotations).getSslByPass(); ok {
-//				b, err := strconv.ParseBool(val)
-//				if err == nil && b && servicePort.Name == "https" {
-//					newSvc.SslByPass = true
-//				}
-//			}
-//
-//			if val, ok := serviceAnnotations(s.ObjectMeta.Annotations).getAclMatch(); ok {
-//				newSvc.AclMatch = val
-//			}
-//
-//			if port, ok := lbc.tcpServices[sName]; ok && port == int(servicePort.Port) {
-//				newSvc.FrontendPort = int(servicePort.Port)
-//				tcpSvc = append(tcpSvc, newSvc)
-//			} else {
-//				if val, ok := serviceAnnotations(s.ObjectMeta.Annotations).getCookieStickySession(); ok {
-//					b, err := strconv.ParseBool(val)
-//					if err == nil {
-//						newSvc.CookieStickySession = b
-//					}
-//				}
-//
-//				newSvc.FrontendPort = lbc.httpPort
-//				if newSvc.SslByPass == true {
-//					httpsSvc = append(httpsSvc, newSvc)
-//				} else {
-//					httpSvc = append(httpSvc, newSvc)
-//				}
-//
-//				//if  lbc.defaultHttpService =="" && newSvc.BackendPort == 80 {
-//				//	lbc.defaultHttpService = newSvc.Name
-//				//	glog.Infof("No default root http is set, set to the first 80 svc:%s\n",lbc.defaultHttpService)
-//				//}
-//			}
-//		}
-//	}
-//
-//	sort.Sort(serviceByName(httpSvc))
-//	sort.Sort(serviceByName(httpsSvc))
-//	sort.Sort(serviceByName(tcpSvc))
-//
-//	return
-//}
-
 func (lbc *haproxyController) getKubeService(name string) *api_v1.Service {
-	//array := strings.Split(name,"/")
-	//if len(array) == 1 {
-	//	name = fmt.Sprintf("default/%s",name)
-	//}
 	svcObj, svcExists, err := lbc.svcLister.Store.GetByKey(name)
 	if err != nil {
 		glog.Warningf("unexpected error searching the default backend %v: %v", name, err)
@@ -384,7 +294,7 @@ func (lbc *haproxyController) getKubeService(name string) *api_v1.Service {
 	return svcObj.(*api_v1.Service)
 }
 
-func (lbc *haproxyController) getIngServices() (httpSvc []haService, httpsSvc []haService) {
+func (lbc *haproxyController) getIngServices() (httpSvc []haService) {
 	ings := lbc.ingLister.Store.List()
 	sort.Sort(ingressByRevision(ings))
 
@@ -441,7 +351,17 @@ func (lbc *haproxyController) getIngServices() (httpSvc []haService, httpsSvc []
 				if kubeService.Spec.SessionAffinity != "" {
 					newSvc.SessionAffinity = true
 				}
-				//newSvc.SslByPass = false
+				newSvc.SslTerm = false
+				if val, ok := serviceAnnotations(kubeService.ObjectMeta.Annotations).getSslTerm(); ok {
+					b, err := strconv.ParseBool(val)
+					if err == nil {
+						newSvc.SslTerm = b
+					}
+				}
+				if newSvc.SslTerm {
+					lbc.haveHttps = true
+				}
+				newSvc.CookieStickySession = false
 				if val, ok := serviceAnnotations(kubeService.ObjectMeta.Annotations).getCookieStickySession(); ok {
 					b, err := strconv.ParseBool(val)
 					if err == nil {
@@ -449,18 +369,18 @@ func (lbc *haproxyController) getIngServices() (httpSvc []haService, httpsSvc []
 					}
 				}
 
-				if path.Backend.ServicePort.String() == "80" {
-					newSvc.FrontendPort = lbc.httpPort
-					newSvc.Name = path.Backend.ServiceName
-					httpSvc = append(httpSvc, newSvc)
-				} else {
-					newSvc.FrontendPort = path.Backend.ServicePort.IntValue()
+				newSvc.Name = path.Backend.ServiceName
+				if path.Backend.ServicePort.IntValue() != 80 {
 					newSvc.Name = fmt.Sprintf("%s:%s",path.Backend.ServiceName, path.Backend.ServicePort.String())
-					httpsSvc = append(httpsSvc, newSvc)
 				}
+				if newSvc.SslTerm {
+					newSvc.FrontendPort = 443
+				} else {
+					newSvc.FrontendPort = lbc.httpPort
+				}
+				httpSvc = append(httpSvc, newSvc)
 
-				if defaultBackend == path.Backend.ServiceName &&
-						(path.Backend.ServicePort.String() == "80" || path.Backend.ServicePort.String() == "443") {
+				if defaultBackend == path.Backend.ServiceName {
 					lbc.defaultHttpService = defaultBackend
 				}
 			}
@@ -468,8 +388,7 @@ func (lbc *haproxyController) getIngServices() (httpSvc []haService, httpsSvc []
 	}
 
 	sort.Sort(serviceByName(httpSvc))
-	sort.Sort(serviceByName(httpsSvc))
-	return httpSvc,httpsSvc
+	return httpSvc
 }
 
 func (lbc *haproxyController) getTcpServices() (tcpSvc []haService) {
@@ -518,7 +437,6 @@ func (lbc *haproxyController) getTcpServices() (tcpSvc []haService) {
 			}
 
 			// By default sslTerm is disabled
-			//newSvc.SslByPass = false
 			newSvc.FrontendPort = int(servicePort.Port)
 			tcpSvc = append(tcpSvc, newSvc)
 		}
@@ -526,10 +444,9 @@ func (lbc *haproxyController) getTcpServices() (tcpSvc []haService) {
 	return tcpSvc
 }
 
-func (lbc *haproxyController) writeConfig(httpSvc []haService, httpsSvc []haService, tcpSvc []haService) {
+func (lbc *haproxyController) writeConfig(httpSvc []haService, tcpSvc []haService) {
 	services := map[string][]haService {
 		"http":  httpSvc,
-		"https": httpsSvc,
 		"tcp":   tcpSvc,
 	}
 
@@ -547,13 +464,18 @@ func (lbc *haproxyController) writeConfig(httpSvc []haService, httpsSvc []haServ
 	conf := make(map[string]interface{})
 	conf["startSyslog"] = strconv.FormatBool(lbc.startSyslog)
 	conf["services"] = services
-	if len(httpsSvc) > 0 {
-		conf["httpsByPass"] = strconv.FormatBool(true)
+	if lbc.rootCertHash != 0 {
+		lbc.pendingSsl = false
+		conf["haveHttps"] = strconv.FormatBool(lbc.haveHttps)
 	} else {
-		conf["httpsByPass"] = strconv.FormatBool(false)
+		if lbc.haveHttps {
+			lbc.pendingSsl = true
+		} else {
+			lbc.pendingSsl = false
+		}
+		conf["haveHttps"] = strconv.FormatBool(false)
 	}
 
-	// default load balancer algorithm is roundrobin
 	conf["defLbAlgorithm"] = lbDefAlgorithm
 	if lbc.lbDefAlgorithm != "" {
 		conf["defLbAlgorithm"] = lbc.lbDefAlgorithm
@@ -566,23 +488,80 @@ func (lbc *haproxyController) writeConfig(httpSvc []haService, httpsSvc []haServ
 	}
 	conf["defaultHttpService"] = defaultHttpName
 
-	for _,svc := range httpsSvc {
-		httpsName := svc.Name
-		tempArray := strings.Split(svc.Name, ":")
-		if len(tempArray) == 2 {
-			httpsName = tempArray[0]
-		}
-		if httpsName == defaultHttpName {
-			conf["defaultHttps"] = svc.Name
-			glog.Infof("defaultHttps:",svc.Name)
-			break
-		}
-	}
-
-
 	if err = t.Execute(w, conf); err != nil {
 		glog.Errorf("Error write haproxy config file:",err)
 	} else {
 		glog.Info("Success write haproxy config file")
+	}
+}
+
+func (lbc *haproxyController) syncSecret() {
+	glog.Infof("starting syncing of secrets")
+
+	if !lbc.hasSynced() {
+		time.Sleep(storeSyncPollPeriod)
+		glog.Warningf("deferring sync till endpoints controller has synced")
+		return
+	}
+
+	keys := lbc.secretTracker.List()
+	if len(keys) < 1 {
+		glog.Info("No secret key is found...")
+	}
+	for _, k := range keys {
+		key := k.(string)
+		sslCert,sslKey,err := lbc.getPemCertificate(key)
+		if err != nil {
+			glog.Warningf("error obtaining PEM from secret %v: %v", key, err)
+			continue
+		}
+		newHash, err := hash.Hash(sslCert, nil)
+		if err != nil {
+			glog.Warningf("error calculate cert hash code")
+			continue
+		}
+		if newHash != lbc.rootCertHash {
+			writeHaproxyCrt(sslCert, sslKey)
+			lbc.rootCertHash = newHash
+			if lbc.pendingSsl {
+				lbc.writeConfig(lbc.httpSvc, lbc.tcpSvc)
+				lbc.reload()
+				lbc.pendingSsl = false
+			}
+		}
+	}
+}
+
+func (lbc *haproxyController) getPemCertificate(secretName string) ([]byte,[]byte,error) {
+	secretInterface, exists, err := lbc.secretLister.Store.GetByKey(secretName)
+	if err != nil {
+		return nil,nil,fmt.Errorf("error retrieving secret %v: %v", secretName, err)
+	}
+	if !exists {
+		return nil,nil,fmt.Errorf("secret named %v does not exist", secretName)
+	}
+
+	secret := secretInterface.(*api_v1.Secret)
+	glog.Infof("found secret:",secretName)
+	sslCert := secret.Data[api_v1.TLSCertKey]
+	sslKey := secret.Data[api_v1.TLSPrivateKeyKey]
+	for key,value := range secret.Data {
+		if strings.HasSuffix(key, ".crt") {
+			sslCert = value
+		} else if strings.HasSuffix(key, ".key") {
+			sslKey = value
+		}
+	}
+
+	return sslCert,sslKey,nil
+}
+
+func (lbc *haproxyController) extractSecretNames(ing *extensions.Ingress) {
+	for _, tls := range ing.Spec.TLS {
+		key := fmt.Sprintf("%v/%v", ing.Namespace, tls.SecretName)
+		_, exists := lbc.secretTracker.Get(key)
+		if !exists {
+			lbc.secretTracker.Add(key, key)
+		}
 	}
 }

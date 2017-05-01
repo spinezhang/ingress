@@ -7,6 +7,10 @@ import (
 
 	api_v1 "k8s.io/client-go/pkg/api/v1"
 	extensions "k8s.io/client-go/pkg/apis/extensions/v1beta1"
+	"k8s.io/client-go/tools/cache"
+	"os"
+	"github.com/golang/glog"
+	"strings"
 )
 
 const (
@@ -28,6 +32,7 @@ const (
 	// to either haproxyIngressClass or the empty string.
 	ingressClassKey = "kubernetes.io/ingress.class"
 	haproxyIngressClass = "haproxy"
+	haproxyCrtFile = "/etc/haproxy.pem"
 )
 
 // ingAnnotations represents Ingress annotations.
@@ -132,4 +137,50 @@ func removeDuplicate(endpoints []string) []string {
 		}
 	}
 	return result
+}
+
+type sslCertTracker struct {
+	cache.ThreadSafeStore
+}
+
+func newSSLCertTracker() *sslCertTracker {
+	return &sslCertTracker{
+		cache.NewThreadSafeStore(cache.Indexers{}, cache.Indices{}),
+	}
+}
+
+type secretTracker struct {
+	cache.ThreadSafeStore
+}
+
+func newSecretTracker() *secretTracker {
+	return &secretTracker{
+		cache.NewThreadSafeStore(cache.Indexers{}, cache.Indices{}),
+	}
+}
+
+func writeHaproxyCrt(cert []byte, key []byte) error {
+	file, err := os.OpenFile(haproxyCrtFile, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
+	if err != nil {
+		glog.Errorf("Cannot open file to write:", err)
+		return err
+	}
+	if _,err := file.Write(pureData(cert)); err != nil {
+		glog.Errorf("Error writting cert:", err)
+		return err
+	}
+	file.Write([]byte("\n"))
+	if _,err := file.Write(pureData(key)); err != nil {
+		glog.Errorf("Error writting key:", err)
+		return err
+	}
+	file.Close()
+	glog.Infof("Success write ssl cert file:", haproxyCrtFile)
+
+	return nil
+}
+
+func pureData(data []byte) []byte {
+	str := string(data)
+	return []byte(strings.Replace(str, "\r", "", -1))
 }
