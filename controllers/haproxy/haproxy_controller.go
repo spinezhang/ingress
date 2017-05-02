@@ -488,6 +488,16 @@ func (lbc *haproxyController) writeConfig(httpSvc []haService, tcpSvc []haServic
 	}
 	conf["defaultHttpService"] = defaultHttpName
 
+	sslHosts := []string{}
+	for _,svc := range httpSvc {
+		if svc.SslTerm {
+			sslHosts = append(sslHosts, svc.Host)
+		}
+	}
+	if len(sslHosts) > 0 {
+		conf["sslHosts"] = strings.Join(sslHosts, " ")
+	}
+
 	if err = t.Execute(w, conf); err != nil {
 		glog.Errorf("Error write haproxy config file:",err)
 	} else {

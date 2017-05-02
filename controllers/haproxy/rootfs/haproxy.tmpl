@@ -83,7 +83,9 @@ frontend httpfrontend
     bind *:80
 {{ if eq .haveHttps "true" }}
     bind *:443 ssl crt /etc/haproxy.pem
-    redirect scheme https if !{ ssl_fc }
+    acl http ssl_fc,not
+    acl is_https hdr_beg(host) -i {{.sslHosts}}
+    http-request redirect scheme https if http is_https
 {{end}}
 
     # inherit default mode, needs changing for tcp
@@ -105,6 +107,7 @@ frontend httpfrontend
     default_backend {{ .defaultHttpService }}
 {{end}}
 {{end}}
+
 
 {{range $i, $svc := .services.http}}
 {{ $svcName := $svc.Name }}
