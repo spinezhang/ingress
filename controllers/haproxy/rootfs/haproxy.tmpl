@@ -94,13 +94,26 @@ frontend httpfrontend
     # in case of host header routing it will add a new acl and use an or
     # condition to determine the backend to be used
     # the style of if/else blocks is meant to preserves the format of the output config file
-{{range $i, $svc := .services.http}}
-    {{ if $svc.Path }} acl url_acl_{{$svc.Name}} path_beg {{$svc.Path}}
-    {{else}} acl url_acl_{{$svc.Name}} path_beg /{{$svc.Name}}
+{{range $i, $host := .httpHosts}}
+    {{ if ne $host.Name "default" }}
+    acl host_acl_{{$host.Name}} hdr(host) -i {{$host.Name}}
+    {{range $j, $svc := $host.Services}}
+    {{ if $svc.Path }}
+    acl url_acl_{{$svc.Name}} path_beg {{$svc.Path}}
+    use_backend {{$svc.Name}} if host_acl_{{$host.Name}} url_acl_{{$svc.Name}}
+    {{ else }}
+    use_backend {{$svc.Name}} if host_acl_{{$host.Name}}
+    {{ end }}
+    {{ end }}
+    {{ else }}
+    {{range $j, $svc := $host.Services}}
+    {{ if $svc.Path }}
+    acl url_acl_{{$svc.Name}} path_beg {{$svc.Path}}
+    {{ else }}
+    acl url_acl_{{$svc.Name}} path_beg /{{$svc.Name}}
     {{ end }}
     use_backend {{$svc.Name}} if url_acl_{{$svc.Name}}
-    {{ if $svc.Host }}acl host_acl_{{$svc.Name}} hdr(host) -i {{$svc.Host}}
-    use_backend {{$svc.Name}} if host_acl_{{$svc.Name}}
+    {{ end }}
     {{ end }}
 {{end}}
 {{ if ne .defaultHttpService "" }}

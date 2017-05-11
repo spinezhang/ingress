@@ -449,7 +449,7 @@ func (lbc *haproxyController) writeConfig(httpSvc []haService, tcpSvc []haServic
 		"http":  httpSvc,
 		"tcp":   tcpSvc,
 	}
-
+	httpHosts := serviceHostArray(httpSvc)
 	var w io.Writer
 	w, err := os.Create(configFile)
 	if err != nil {
@@ -464,6 +464,7 @@ func (lbc *haproxyController) writeConfig(httpSvc []haService, tcpSvc []haServic
 	conf := make(map[string]interface{})
 	conf["startSyslog"] = strconv.FormatBool(lbc.startSyslog)
 	conf["services"] = services
+	conf["httpHosts"] = httpHosts
 	if lbc.rootCertHash != 0 {
 		lbc.pendingSsl = false
 		conf["haveHttps"] = strconv.FormatBool(lbc.haveHttps)
@@ -482,6 +483,9 @@ func (lbc *haproxyController) writeConfig(httpSvc []haService, tcpSvc []haServic
 	}
 
 	defaultHttpName := lbc.defaultHttpService
+	if defaultHttpName == "" && len(httpSvc) > 0 {
+		defaultHttpName = httpSvc[0].Name
+	}
 	array := strings.Split(lbc.defaultHttpService, "/")
 	if len(array) == 2 {
 		defaultHttpName = array[1]
@@ -574,4 +578,24 @@ func (lbc *haproxyController) extractSecretNames(ing *extensions.Ingress) {
 			lbc.secretTracker.Add(key, key)
 		}
 	}
+}
+
+func serviceHostArray(services []haService) []httpHost {
+	hosts := []httpHost{}
+	hostMap := map[string][]haService {}
+	for _,svc := range services {
+		if svc.Host != "" {
+			hostMap[svc.Host] = append(hostMap[svc.Host], svc)
+		} else {
+			hostMap["default"] = append(hostMap["default"], svc)
+		}
+	}
+	for key,val := range hostMap {
+		newHost := httpHost{
+			Name: key,
+			Services: val,
+		}
+		hosts = append(hosts, newHost)
+	}
+	return hosts
 }

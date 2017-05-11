@@ -8,6 +8,11 @@ const (
 	lbCookieStickySessionKey = "serviceloadbalancer/lb.cookie-sticky-session"
 )
 
+type httpHost struct {
+	Name string
+	Services []haService
+}
+
 type haService struct {
 	Name string
 	Ep   []string
