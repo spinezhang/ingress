@@ -395,7 +395,10 @@ func (lbc *haproxyController) getTcpServices() (tcpSvc []haService) {
 	newServices := []*api_v1.Service{}
 
 	for name,_ := range lbc.tcpServices {
-		service := lbc.getKubeService(fmt.Sprintf("default/%s",name))
+		if !strings.Contains(name, "/") {
+			name = fmt.Sprintf("default/%s",name)
+		}
+		service := lbc.getKubeService(name)
 		if  service != nil {
 			newServices = append(newServices, service)
 		}

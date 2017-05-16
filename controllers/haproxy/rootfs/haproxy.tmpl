@@ -28,10 +28,6 @@ defaults
     # Enable HTTP connection closing on the server side.
     option http-server-close
 
-    # Enable insertion of the X-Forwarded-For header to requests sent to 
-    # servers and keep client IP address.
-    option forwardfor
-
     # Enable HTTP keep-alive from client to server.
     option http-keep-alive
 
@@ -81,6 +77,7 @@ listen stats
 frontend httpfrontend
     # Frontend bound on all network interfaces on port 80
     bind *:80
+    option forwardfor
 {{ if eq .haveHttps "true" }}
     bind *:443 ssl crt /etc/haproxy.pem
     acl http ssl_fc,not
