@@ -1,7 +1,7 @@
 all: push
 
 # 0.0 shouldn't clobber any released builds
-TAG ?= 0.5
+TAG ?= 0.6
 PREFIX ?= registry.cn-hangzhou.aliyuncs.com/dhms/haproxy-slb
 SRC = main.go haproxy_controller.go utils.go tls.go static_page.go haproxy_log.go templ_service.go
 

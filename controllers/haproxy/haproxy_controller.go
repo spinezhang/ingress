@@ -77,6 +77,7 @@ type haproxyController struct {
 	rootCertHash		uint64
 	haveHttps			bool
 	pendingSsl			bool
+	redirects			[]httpRedirect
 }
 
 type haproxyParams struct {
@@ -309,6 +310,10 @@ func (lbc *haproxyController) getIngServices() (httpSvc []haService) {
 		if ing.Spec.Backend != nil {
 			defaultBackend = ing.Spec.Backend.ServiceName
 		}
+		lbc.redirects = getIngressRedirects(ing)
+		if lbc.redirects != nil {
+			glog.Infof("redirects:%v\n", lbc.redirects)
+		}
 
 		for _, rule := range ing.Spec.Rules {
 			if rule.HTTP == nil {
@@ -468,6 +473,7 @@ func (lbc *haproxyController) writeConfig(httpSvc []haService, tcpSvc []haServic
 	conf["startSyslog"] = strconv.FormatBool(lbc.startSyslog)
 	conf["services"] = services
 	conf["httpHosts"] = httpHosts
+	conf["httpRedirects"] = lbc.redirects
 	if lbc.rootCertHash != 0 {
 		lbc.pendingSsl = false
 		conf["haveHttps"] = strconv.FormatBool(lbc.haveHttps)

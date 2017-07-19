@@ -13,6 +13,11 @@ type httpHost struct {
 	Services []haService
 }
 
+type httpRedirect struct {
+	Src string
+	Dest string
+}
+
 type haService struct {
 	Name string
 	Ep   []string

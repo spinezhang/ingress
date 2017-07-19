@@ -33,6 +33,7 @@ const (
 	ingressClassKey = "kubernetes.io/ingress.class"
 	haproxyIngressClass = "haproxy"
 	haproxyCrtFile = "/etc/haproxy.pem"
+	redirectKey = "kubernetes.io/redirects"
 )
 
 // ingAnnotations represents Ingress annotations.
@@ -59,6 +60,31 @@ func (ing ingAnnotations) ingressClass() string {
 	return val
 }
 
+func (ing ingAnnotations) ingressRedirects() []httpRedirect {
+
+	val,ok := ing[redirectKey]
+	if !ok {
+		return nil
+	}
+	redirects := map[string]string{}
+	if err := json.Unmarshal([]byte(val), &redirects); err != nil {
+		glog.Errorf("ingressRedirects json.Unmarshal failed:", err)
+		return nil
+	}
+	results := []httpRedirect{}
+	for key,val := range redirects {
+		item := httpRedirect{
+			Src: key,
+			Dest: val,
+		}
+		results = append(results, item)
+	}
+	return results
+}
+
+func getIngressRedirects(ing *extensions.Ingress) []httpRedirect {
+	return ingAnnotations(ing.ObjectMeta.Annotations).ingressRedirects()
+}
 // svcAnnotations represents Service annotations.
 type svcAnnotations map[string]string
 

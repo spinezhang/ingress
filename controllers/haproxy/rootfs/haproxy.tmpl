@@ -84,6 +84,10 @@ frontend httpfrontend
     acl is_https hdr_beg(host) -i {{.sslHosts}}
     http-request redirect scheme https if http is_https
 {{end}}
+{{range $i, $redirectItem := .httpRedirects}}
+    acl redirect_{{$redirectItem.Src}} hdr_beg(host) -i {{$redirectItem.Src}}
+    redirect location {{$redirectItem.Dest}} if redirect_{{$redirectItem.Src}} http
+{{end}}
 
     # inherit default mode, needs changing for tcp
     # forward everything meant for /foo to the foo backend
