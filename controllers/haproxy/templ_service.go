@@ -34,8 +34,6 @@ type haService struct {
 	// host header inside the http request. It only applies to http traffic.
 	Host string
 
-	SslTerm bool
-
 	// if set use this to match the path rule
 	Path string
 

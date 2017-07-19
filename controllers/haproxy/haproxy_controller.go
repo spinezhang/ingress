@@ -74,9 +74,9 @@ type haproxyController struct {
 	tcpSvc 				[]haService
 
 	rootCertHash		uint64
-	haveHttps			bool
 	pendingSsl			bool
 	redirects			[]httpRedirect
+	sslHosts			[]string
 }
 
 type haproxyParams struct {
@@ -96,7 +96,6 @@ func newHaproxyController(kubeClient kubernetes.Interface, namespace string, par
 		sslCertTracker: newSSLCertTracker(),
 		secretTracker:  newSecretTracker(),
 		rootCertHash: uint64(0),
-		haveHttps: false,
 		pendingSsl: false,
 	}
 
@@ -354,16 +353,6 @@ func (lbc *haproxyController) getIngServices() (httpSvc []haService, tcpSvc []ha
 				if kubeService.Spec.SessionAffinity != "" {
 					newSvc.SessionAffinity = true
 				}
-				newSvc.SslTerm = false
-				if val, ok := serviceAnnotations(kubeService.ObjectMeta.Annotations).getSslTerm(); ok {
-					b, err := strconv.ParseBool(val)
-					if err == nil {
-						newSvc.SslTerm = b
-					}
-				}
-				if newSvc.SslTerm {
-					lbc.haveHttps = true
-				}
 				newSvc.CookieStickySession = false
 				if val, ok := serviceAnnotations(kubeService.ObjectMeta.Annotations).getCookieStickySession(); ok {
 					b, err := strconv.ParseBool(val)
@@ -376,7 +365,7 @@ func (lbc *haproxyController) getIngServices() (httpSvc []haService, tcpSvc []ha
 				if path.Backend.ServicePort.IntValue() != 80 {
 					newSvc.Name = fmt.Sprintf("%s:%s",path.Backend.ServiceName, path.Backend.ServicePort.String())
 				}
-				if newSvc.SslTerm {
+				if lbc.isSslHost(newSvc.Host) {
 					newSvc.FrontendPort = 443
 				} else {
 					newSvc.FrontendPort = lbc.httpPort
@@ -472,11 +461,12 @@ func (lbc *haproxyController) writeConfig(httpSvc []haService, tcpSvc []haServic
 	conf["services"] = services
 	conf["httpHosts"] = httpHosts
 	conf["httpRedirects"] = lbc.redirects
+	haveHttps := len(lbc.sslHosts) > 0
 	if lbc.rootCertHash != 0 {
 		lbc.pendingSsl = false
-		conf["haveHttps"] = strconv.FormatBool(lbc.haveHttps)
+		conf["haveHttps"] = strconv.FormatBool(haveHttps)
 	} else {
-		if lbc.haveHttps {
+		if haveHttps {
 			lbc.pendingSsl = true
 		} else {
 			lbc.pendingSsl = false
@@ -499,14 +489,8 @@ func (lbc *haproxyController) writeConfig(httpSvc []haService, tcpSvc []haServic
 	}
 	conf["defaultHttpService"] = defaultHttpName
 
-	sslHosts := []string{}
-	for _,svc := range httpSvc {
-		if svc.SslTerm {
-			sslHosts = append(sslHosts, svc.Host)
-		}
-	}
-	if len(sslHosts) > 0 {
-		conf["sslHosts"] = strings.Join(sslHosts, " ")
+	if len(lbc.sslHosts) > 0 {
+		conf["sslHosts"] = strings.Join(lbc.sslHosts, " ")
 	}
 
 	if err = t.Execute(w, conf); err != nil {
@@ -584,7 +568,20 @@ func (lbc *haproxyController) extractSecretNames(ing *extensions.Ingress) {
 		if !exists {
 			lbc.secretTracker.Add(key, key)
 		}
+		lbc.sslHosts = []string{}
+		for _,host := range tls.Hosts {
+			lbc.sslHosts = append(lbc.sslHosts,host)
+		}
 	}
+}
+
+func (lbc *haproxyController) isSslHost(host string) bool {
+	for _,sslHost := range lbc.sslHosts {
+		if strings.ToLower(host) == strings.ToLower(sslHost) {
+			return true
+		}
+	}
+	return false
 }
 
 func serviceHostArray(services []haService) []httpHost {
