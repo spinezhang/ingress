@@ -64,7 +64,6 @@ type haproxyController struct {
 	hasSynced func() 	bool
 
 	template           string
-	tcpServices        map[string]int
 	defaultHttpService string
 	httpPort			int
 	lbDefAlgorithm		string
@@ -85,13 +84,11 @@ type haproxyParams struct {
 	httpPort 		int
 	//defaultHttpSvc 	string
 	lbDefAlgorithm 	string
-	tcpSvcs 		map[string]int
 }
 
 func newHaproxyController(kubeClient kubernetes.Interface, namespace string, params *haproxyParams) *haproxyController {
 	lbc := haproxyController{
 		client: kubeClient,
-		tcpServices: params.tcpSvcs,
 		httpPort: params.httpPort,
 		lbDefAlgorithm: params.lbDefAlgorithm,
 		startSyslog: params.startSyslog,
@@ -226,8 +223,7 @@ func (lbc *haproxyController) syncIngress(key interface{}) error {
 		return fmt.Errorf("waiting for stores to sync")
 	}
 
-	httpSvc := lbc.getIngServices()
-	tcpSvc := lbc.getTcpServices()
+	httpSvc,tcpSvc := lbc.getIngServices()
 
 	isChanged := false
 	if !reflect.DeepEqual(httpSvc, lbc.httpSvc) {
@@ -295,7 +291,7 @@ func (lbc *haproxyController) getKubeService(name string) *api_v1.Service {
 	return svcObj.(*api_v1.Service)
 }
 
-func (lbc *haproxyController) getIngServices() (httpSvc []haService) {
+func (lbc *haproxyController) getIngServices() (httpSvc []haService, tcpSvc []haService) {
 	ings := lbc.ingLister.Store.List()
 	sort.Sort(ingressByRevision(ings))
 
@@ -314,6 +310,8 @@ func (lbc *haproxyController) getIngServices() (httpSvc []haService) {
 		if lbc.redirects != nil {
 			glog.Infof("redirects:%v\n", lbc.redirects)
 		}
+		tcpSvcMap := getIngressTcpServices(ing)
+		tcpSvc = lbc.getTcpServices(tcpSvcMap)
 
 		for _, rule := range ing.Spec.Rules {
 			if rule.HTTP == nil {
@@ -393,13 +391,13 @@ func (lbc *haproxyController) getIngServices() (httpSvc []haService) {
 	}
 
 	sort.Sort(serviceByName(httpSvc))
-	return httpSvc
+	return httpSvc,tcpSvc
 }
 
-func (lbc *haproxyController) getTcpServices() (tcpSvc []haService) {
+func (lbc *haproxyController) getTcpServices(svcMap map[string]int) (tcpSvc []haService) {
 	newServices := []*api_v1.Service{}
 
-	for name,_ := range lbc.tcpServices {
+	for name,_ := range svcMap {
 		if !strings.Contains(name, "/") {
 			name = fmt.Sprintf("default/%s",name)
 		}

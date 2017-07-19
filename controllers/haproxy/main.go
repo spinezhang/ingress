@@ -2,14 +2,12 @@ package main
 
 import (
 	"os"
-	"strings"
 
 	go_flag "flag"
 	flag "github.com/spf13/pflag"
 	"github.com/golang/glog"
 	"time"
 	"k8s.io/client-go/pkg/api"
-	"strconv"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
@@ -53,10 +51,6 @@ var (
 	// Any service not specified in this map is treated as an http:80 service,
 	// unless TargetService dictates otherwise.
 
-	tcpServices = flags.String("tcp-services", "", `Comma separated list of tcp/https
-                serviceName:servicePort pairings. This assumes you've opened up the right
-                hostPorts for each service that serves ingress traffic.`)
-
 	//statsPort = flags.Int("stats-port", 1936, `Port for loadbalancer stats,
      //           Used in the loadbalancer liveness probe.`)
 
@@ -89,13 +83,6 @@ func main() {
 	}
 	go registerHandlers(lbAPIPort, defErrorPage)
 
-	var tcpSvcs map[string]int
-	if *tcpServices != "" {
-		tcpSvcs = parseTCPServices(*tcpServices)
-	} else {
-		glog.Infof("No tcp/https services specified")
-	}
-
 	//glog.Infof("default backend service:",*defaultSvc)
 	if *startSyslog {
 		//cfg.startSyslog = true
@@ -113,7 +100,6 @@ func main() {
 		startSyslog: *startSyslog,
 		httpPort: *defaultHttpPort,
 		lbDefAlgorithm: *lbDefAlgorithm,
-		tcpSvcs: tcpSvcs,
 	}
 	lbc := newHaproxyController(kubeClient, api.NamespaceAll, &params)
 
@@ -149,24 +135,4 @@ func createClient(inCluster bool, apiServerHost string, kubeConfigFile string) (
 	}
 
 	return kubernetes.NewForConfig(config)
-}
-
-func parseTCPServices(tcpServices string) map[string]int {
-	tcpSvcs := make(map[string]int)
-	for _, service := range strings.Split(tcpServices, ",") {
-		portSplit := strings.Split(service, ":")
-		if len(portSplit) != 2 {
-			glog.Errorf("Ignoring misconfigured TCP service %v", service)
-			continue
-		}
-		if port, err := strconv.Atoi(portSplit[1]); err != nil {
-			glog.Errorf("Ignoring misconfigured TCP service %v: %v", service, err)
-			continue
-		} else {
-			glog.Infof("Adding TCP service %v", service)
-			tcpSvcs[portSplit[0]] = port
-		}
-	}
-
-	return tcpSvcs
 }

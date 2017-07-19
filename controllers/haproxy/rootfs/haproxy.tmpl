@@ -80,13 +80,13 @@ frontend httpfrontend
     option forwardfor
 {{ if eq .haveHttps "true" }}
     bind *:443 ssl crt /etc/haproxy.pem
-    acl http ssl_fc,not
+    acl insecure ssl_fc,not
     acl is_https hdr_beg(host) -i {{.sslHosts}}
-    http-request redirect scheme https if http is_https
+    http-request redirect scheme https if insecure is_https
 {{end}}
 {{range $i, $redirectItem := .httpRedirects}}
     acl redirect_{{$redirectItem.Src}} hdr_beg(host) -i {{$redirectItem.Src}}
-    redirect location {{$redirectItem.Dest}} if redirect_{{$redirectItem.Src}} http
+    redirect location {{$redirectItem.Dest}} if insecure redirect_{{$redirectItem.Src}}
 {{end}}
 
     # inherit default mode, needs changing for tcp
