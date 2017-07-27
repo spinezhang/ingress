@@ -310,7 +310,15 @@ func (lbc *haproxyController) getIngServices() (httpSvc []haService, tcpSvc []ha
 			glog.Infof("redirects:%v\n", lbc.redirects)
 		}
 		tcpSvcMap := getIngressTcpServices(ing)
-		tcpSvc = lbc.getTcpServices(tcpSvcMap)
+		if tcpSvcMap == nil {
+			glog.Errorf("Cannot find TCP services:%v",ing)
+		} else {
+			newTcpSvc := lbc.getTcpServices(tcpSvcMap)
+			glog.Infof("Found TCP Service :%#v(%#v)\n",tcpSvcMap,newTcpSvc)
+			if newTcpSvc != nil {
+				tcpSvc = append(tcpSvc,newTcpSvc...)
+			}
+		}
 
 		for _, rule := range ing.Spec.Rules {
 			if rule.HTTP == nil {

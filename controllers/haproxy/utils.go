@@ -86,6 +86,7 @@ func (ing ingAnnotations) ingressRedirects() []httpRedirect {
 func (ing ingAnnotations) ingressTcpServices() map[string]int {
 	val,ok := ing[tcpServiceKey]
 	if !ok {
+		glog.Errorf("Cannot find tcpServiceKey,%#v",ing)
 		return nil
 	}
 	tcpServices := map[string]int{}
