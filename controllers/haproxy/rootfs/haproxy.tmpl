@@ -79,7 +79,8 @@ frontend httpfrontend
     bind *:80
     option forwardfor
 {{ if eq .haveHttps "true" }}
-    bind *:443 ssl crt /etc/haproxy.pem
+    bind *:443 ssl {{.sslCerts}}
+
     acl insecure ssl_fc,not
     acl is_https hdr_beg(host) -i {{.sslHosts}}
     http-request redirect scheme https if insecure is_https
@@ -117,9 +118,9 @@ frontend httpfrontend
     {{ end }}
     {{ end }}
 {{end}}
-{{ if ne .defaultHttpService "" }}
-    default_backend {{ .defaultHttpService }}
-{{end}}
+#{{ if ne .defaultHttpService "" }}
+#    default_backend {{ .defaultHttpService }}
+#{{end}}
 {{end}}
 
 

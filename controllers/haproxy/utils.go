@@ -32,7 +32,6 @@ const (
 	// to either haproxyIngressClass or the empty string.
 	ingressClassKey = "kubernetes.io/ingress.class"
 	haproxyIngressClass = "haproxy"
-	haproxyCrtFile = "/etc/haproxy.pem"
 	redirectKey = "kubernetes.io/redirects"
 	tcpServiceKey = "kubernetes.io/tcpservices"
 )
@@ -205,8 +204,8 @@ func newSecretTracker() *secretTracker {
 	}
 }
 
-func writeHaproxyCrt(cert []byte, key []byte) error {
-	file, err := os.OpenFile(haproxyCrtFile, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
+func writeHaproxyCrt(name string, cert []byte, key []byte) error {
+	file, err := os.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
 	if err != nil {
 		glog.Errorf("Cannot open file to write:", err)
 		return err
@@ -221,7 +220,7 @@ func writeHaproxyCrt(cert []byte, key []byte) error {
 		return err
 	}
 	file.Close()
-	glog.Infof("Success write ssl cert file:", haproxyCrtFile)
+	//glog.Infof("Success write ssl cert file:", haproxyCrtFile)
 
 	return nil
 }

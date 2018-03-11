@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-FROM registry.cn-hangzhou.aliyuncs.com/dhms/haproxy:1.7
+FROM registry.cn-beijing.aliyuncs.com/dhms-p/haproxy:1.7
 
 RUN mkdir -p /etc/haproxy/errors /var/state/haproxy
 COPY errors /etc/haproxy/errors

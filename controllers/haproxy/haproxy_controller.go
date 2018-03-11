@@ -73,10 +73,10 @@ type haproxyController struct {
 	httpSvc 			[]haService
 	tcpSvc 				[]haService
 
-	rootCertHash		uint64
 	pendingSsl			bool
 	redirects			[]httpRedirect
 	sslHosts			[]string
+	certs               map[string]uint64
 }
 
 type haproxyParams struct {
@@ -95,12 +95,12 @@ func newHaproxyController(kubeClient kubernetes.Interface, namespace string, par
 		syncRateLimiter: flowcontrol.NewTokenBucketRateLimiter(0.1, 1),
 		sslCertTracker: newSSLCertTracker(),
 		secretTracker:  newSecretTracker(),
-		rootCertHash: uint64(0),
 		pendingSsl: false,
 	}
 
 	lbc.syncQueue = task.NewTaskQueue(lbc.syncIngress)
 	lbc.hasSynced = lbc.storesSynced
+	lbc.certs = make(map[string]uint64)
 
 	ingEventHandler := cache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj interface{}) {
@@ -470,9 +470,19 @@ func (lbc *haproxyController) writeConfig(httpSvc []haService, tcpSvc []haServic
 	conf["httpHosts"] = httpHosts
 	conf["httpRedirects"] = lbc.redirects
 	haveHttps := len(lbc.sslHosts) > 0
-	if lbc.rootCertHash != 0 {
+	if len(lbc.certs) > 0 {
 		lbc.pendingSsl = false
-		conf["haveHttps"] = strconv.FormatBool(haveHttps)
+		certs := ""
+		for key := range lbc.certs {
+			certs += " crt " + key
+		}
+		glog.Infof("ssl certs:%s",certs)
+		if certs != "" {
+			conf["sslCerts"] = certs
+			conf["haveHttps"] = strconv.FormatBool(haveHttps)
+		} else {
+			conf["haveHttps"] = strconv.FormatBool(false)
+		}
 	} else {
 		if haveHttps {
 			lbc.pendingSsl = true
@@ -521,6 +531,7 @@ func (lbc *haproxyController) syncSecret() {
 	if len(keys) < 1 {
 		glog.Info("No secret key is found...")
 	}
+	reload := false
 	for _, k := range keys {
 		key := k.(string)
 		sslCert,sslKey,err := lbc.getPemCertificate(key)
@@ -533,15 +544,23 @@ func (lbc *haproxyController) syncSecret() {
 			glog.Warningf("error calculate cert hash code")
 			continue
 		}
-		if newHash != lbc.rootCertHash {
-			writeHaproxyCrt(sslCert, sslKey)
-			lbc.rootCertHash = newHash
-			if lbc.pendingSsl {
-				lbc.writeConfig(lbc.httpSvc, lbc.tcpSvc)
-				lbc.reload()
-				lbc.pendingSsl = false
+		if strings.Contains(key, "/") {
+			key = key[strings.Index(key, "/")+1:]
+		}
+		crtName := "/etc/"+ key + ".pem"
+		if lbc.certs[crtName] != newHash {
+			if err := writeHaproxyCrt(crtName, sslCert, sslKey); err == nil {
+				lbc.certs[crtName] = newHash
+				reload = true
 			}
 		}
+	}
+	if lbc.pendingSsl || reload {
+		lbc.writeConfig(lbc.httpSvc, lbc.tcpSvc)
+		lbc.pendingSsl = false
+	}
+	if reload {
+		lbc.reload()
 	}
 }
 
@@ -570,13 +589,13 @@ func (lbc *haproxyController) getPemCertificate(secretName string) ([]byte,[]byt
 }
 
 func (lbc *haproxyController) extractSecretNames(ing *extensions.Ingress) {
+	lbc.sslHosts = []string{}
 	for _, tls := range ing.Spec.TLS {
 		key := fmt.Sprintf("%v/%v", ing.Namespace, tls.SecretName)
 		_, exists := lbc.secretTracker.Get(key)
 		if !exists {
 			lbc.secretTracker.Add(key, key)
 		}
-		lbc.sslHosts = []string{}
 		for _,host := range tls.Hosts {
 			lbc.sslHosts = append(lbc.sslHosts,host)
 		}

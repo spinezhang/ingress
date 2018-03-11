@@ -1,12 +1,12 @@
 all: push
 
 # 0.0 shouldn't clobber any released builds
-TAG ?= 0.7
-PREFIX ?= registry.cn-hangzhou.aliyuncs.com/dhms/haproxy-slb
+TAG ?= 0.8
+PREFIX ?= registry.cn-beijing.aliyuncs.com/dhms-p/haproxy
 SRC = main.go haproxy_controller.go utils.go tls.go static_page.go haproxy_log.go templ_service.go
 
 rootfs/haproxy-ingress-controller: $(SRC) Makefile
-	CGO_ENABLED=0 GOOS=linux godep go build -a -installsuffix cgo -ldflags '-w' -o $@  $(SRC)
+	CGO_ENABLED=0 GOOS=linux godep go build -a -installsuffix cgo -ldflags '-w -s' -o $@  $(SRC)
 
 container: rootfs/haproxy-ingress-controller
 	docker build --pull -t $(PREFIX):$(TAG) rootfs
