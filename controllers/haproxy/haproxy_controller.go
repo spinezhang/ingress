@@ -534,6 +534,7 @@ func (lbc *haproxyController) syncSecret() {
 	reload := false
 	for _, k := range keys {
 		key := k.(string)
+		glog.Infof("Check secret:%s", key)
 		sslCert,sslKey,err := lbc.getPemCertificate(key)
 		if err != nil {
 			glog.Warningf("error obtaining PEM from secret %v: %v", key, err)
@@ -544,9 +545,7 @@ func (lbc *haproxyController) syncSecret() {
 			glog.Warningf("error calculate cert hash code")
 			continue
 		}
-		if strings.Contains(key, "/") {
-			key = key[strings.Index(key, "/")+1:]
-		}
+		key = strings.Replace(key, "/", "-", -1)
 		crtName := "/etc/"+ key + ".pem"
 		if lbc.certs[crtName] != newHash {
 			if err := writeHaproxyCrt(crtName, sslCert, sslKey); err == nil {

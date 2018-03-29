@@ -1,8 +1,9 @@
 all: push
 
 # 0.0 shouldn't clobber any released builds
-TAG ?= 0.8
+TAG ?= 0.9
 PREFIX ?= registry.cn-beijing.aliyuncs.com/dhms-p/haproxy
+#PREFIX ?= lan.dhms.cloud:5000/haproxy
 SRC = main.go haproxy_controller.go utils.go tls.go static_page.go haproxy_log.go templ_service.go
 
 rootfs/haproxy-ingress-controller: $(SRC) Makefile
