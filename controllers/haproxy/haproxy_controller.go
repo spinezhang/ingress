@@ -187,6 +187,8 @@ func newHaproxyController(kubeClient kubernetes.Interface, namespace string, par
 }
 
 func (lbc *haproxyController) Run() {
+	lbc.certs = nil
+	lbc.certs = make(map[string]uint64)
 	go lbc.reload()
 
 	go lbc.ingController.Run(wait.NeverStop)
@@ -319,6 +321,8 @@ func (lbc *haproxyController) getIngServices() (httpSvc []haService, tcpSvc []ha
 				tcpSvc = append(tcpSvc,newTcpSvc...)
 			}
 		}
+
+		lbc.extractSecretNames(ing)
 
 		for _, rule := range ing.Spec.Rules {
 			if rule.HTTP == nil {
@@ -476,7 +480,7 @@ func (lbc *haproxyController) writeConfig(httpSvc []haService, tcpSvc []haServic
 		for key := range lbc.certs {
 			certs += " crt " + key
 		}
-		glog.Infof("ssl certs:%s",certs)
+		glog.Infof("ssl certs:%s, httpHosts:%d, sslHosts:%#v",certs, haveHttps, lbc.sslHosts)
 		if certs != "" {
 			conf["sslCerts"] = certs
 			conf["haveHttps"] = strconv.FormatBool(haveHttps)
@@ -547,10 +551,12 @@ func (lbc *haproxyController) syncSecret() {
 		}
 		key = strings.Replace(key, "/", "-", -1)
 		crtName := "/etc/"+ key + ".pem"
+		glog.Infof("crt:%s, old hash:%d", crtName, lbc.certs[crtName])
 		if lbc.certs[crtName] != newHash {
 			if err := writeHaproxyCrt(crtName, sslCert, sslKey); err == nil {
 				lbc.certs[crtName] = newHash
 				reload = true
+				glog.Infof("new crt:%s, hash:%d", crtName, newHash)
 			}
 		}
 	}
