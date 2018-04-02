@@ -315,7 +315,7 @@ func (lbc *haproxyController) getIngServices() (httpSvc []haService, tcpSvc []ha
 		if tcpSvcMap == nil {
 			glog.Errorf("Cannot find TCP services:%v",ing)
 		} else {
-			newTcpSvc := lbc.getTcpServices(tcpSvcMap)
+			newTcpSvc := lbc.getTcpServices(ing.GetNamespace(), tcpSvcMap)
 			glog.Infof("Found TCP Service :%#v(%#v)\n",tcpSvcMap,newTcpSvc)
 			if newTcpSvc != nil {
 				tcpSvc = append(tcpSvc,newTcpSvc...)
@@ -395,12 +395,12 @@ func (lbc *haproxyController) getIngServices() (httpSvc []haService, tcpSvc []ha
 	return httpSvc,tcpSvc
 }
 
-func (lbc *haproxyController) getTcpServices(svcMap map[string]int) (tcpSvc []haService) {
+func (lbc *haproxyController) getTcpServices(namespace string, svcMap map[string]int) (tcpSvc []haService) {
 	newServices := []*api_v1.Service{}
 
-	for name,_ := range svcMap {
+	for name := range svcMap {
 		if !strings.Contains(name, "/") {
-			name = fmt.Sprintf("default/%s",name)
+			name = fmt.Sprintf("%s/%s", namespace, name)
 		}
 		service := lbc.getKubeService(name)
 		if  service != nil {
@@ -418,6 +418,10 @@ func (lbc *haproxyController) getTcpServices(svcMap map[string]int) (tcpSvc []ha
 			endp := lbc.getEndpoints(service, int(servicePort.Port))
 			if len(endp) == 0 {
 				glog.Infof("No endpoints found for service %v, port %d",service.Name, servicePort)
+				continue
+			}
+			if int(servicePort.Port) != svcMap[service.Name] {
+				glog.Infof("Ignore non-public TCP service %v, port %d",service.Name, servicePort)
 				continue
 			}
 			newSvc := haService{
